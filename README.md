@@ -66,3 +66,7 @@ All domains registered during the final week of 2025 that used the nameserver `s
 Find historical domains that were registered with an FBI email address:
 
 `python3 main.py historical --registrant_email_wildcard *@fbi.gov`
+
+Find any domain registered in January 2025 that contained the keyword "Facebook".
+
+`python3 main.py current --domain_keyword_wildcard facebook* --create_date_from 2025-01-01 --create_date_to 2025-01-31`

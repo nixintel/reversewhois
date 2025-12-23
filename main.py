@@ -2,22 +2,31 @@
 """
 Reverse Whois Query Script with Extended Options
 
-This independent tool allows you to query the Big Domain Data Reverse WHOIS API.
-You can query either the 'current' or 'historical' database and filter results using various search fields.
+This independent tool allows you to query the Big Domain Data WHOIS API.
+You can query either the 'current' or 'historical' database for reverse WHOIS searches,
+or use the 'bulk' endpoint to query multiple domains at once.
 
-Valid search fields include:
-  domain_keyword, domain_name, domain_tld, query_date, query_date_from, query_date_to,
-  query_year, create_date, create_date_from, create_date_to, create_year, update_date,
-  update_date_from, update_date_to, update_year, expiry_date, expiry_date_from, expiry_date_to,
-  expiry_year, registrar_iana, registrar_name, registrar_website, registrant_name,
-  registrant_company, registrant_address, registrant_city, registrant_state, registrant_zip,
-  registrant_country, registrant_email, registrant_phone, registrant_fax, name_servers,
-  domain_status, dns_sec, and their respective wildcard versions (e.g. domain_keyword_wildcard).
+Reverse WHOIS Search (current/historical databases):
+  Query by filtering results using various search fields.
+  Valid search fields include:
+    domain_keyword, domain_name, domain_tld, query_date, query_date_from, query_date_to,
+    query_year, create_date, create_date_from, create_date_to, create_year, update_date,
+    update_date_from, update_date_to, update_year, expiry_date, expiry_date_from, expiry_date_to,
+    expiry_year, registrar_iana, registrar_name, registrar_website, registrant_name,
+    registrant_company, registrant_address, registrant_city, registrant_state, registrant_zip,
+    registrant_country, registrant_email, registrant_phone, registrant_fax, name_servers,
+    domain_status, dns_sec, and their respective wildcard versions (e.g. domain_keyword_wildcard).
+
+Bulk WHOIS Query (bulk endpoint):
+  Query multiple domains simultaneously by providing a comma-separated list or a file.
+  Usage:
+    python main.py bulk --domains yahoo.com,google.com,amazon.com
+    python main.py bulk --domains-file domains.txt
 
 Additional Options:
   --output <filename>  Specify a custom CSV output filename (overrides default naming).
   --show               Display the CSV output on the terminal.
-  --balance            Check API balance only (skips reverse WHOIS query).
+  --balance            Check API balance only (skips WHOIS query).
   --debug              Show debug logging information.
 
 For more information on the API, please refer to:
@@ -171,12 +180,93 @@ def check_api_balance(api_key):
         raise
 
 # ------------------------------------------------------------------------------
-def write_csv(results_data, output_filename=None):
+def query_bulk_whois_api(api_key, domains):
+    """
+    Query the bulk WHOIS API with a list of domains.
+    
+    Args:
+        api_key: The API key for authentication.
+        domains: List of domain names to query.
+    
+    Returns:
+        JSON response from the API.
+    """
+    base_url = "https://api.bigdomaindata.com/"
+    # Join domains with comma for the bulk_whois parameter
+    domains_str = ",".join(domains)
+    params = {
+        "key": api_key,
+        "bulk_whois": domains_str,
+    }
+    
+    logging.debug("Querying bulk WHOIS API with %d domains", len(domains))
+    try:
+        response = requests.get(base_url, params=params)
+        logging.debug("Received HTTP status code: %s", response.status_code)
+        response.raise_for_status()
+        json_response = response.json()
+        logging.debug("API response JSON: %s", json_response)
+        return json_response
+    except requests.exceptions.RequestException as req_err:
+        logging.error("Error during bulk WHOIS API request: %s", req_err, exc_info=True)
+        raise
+
+# ------------------------------------------------------------------------------
+def parse_domain_input(domains_arg, domains_file_arg):
+    """
+    Parse domain input from either command-line argument or file.
+    
+    Args:
+        domains_arg: Comma-separated domain string from --domains argument.
+        domains_file_arg: Path to file containing domains from --domains-file argument.
+    
+    Returns:
+        List of domain names.
+    
+    Raises:
+        ValueError: If no domains are provided or both arguments are specified.
+    """
+    if domains_arg and domains_file_arg:
+        raise ValueError("Please specify either --domains or --domains-file, not both.")
+    
+    if not domains_arg and not domains_file_arg:
+        raise ValueError("For bulk queries, you must provide either --domains or --domains-file.")
+    
+    domains = []
+    
+    if domains_arg:
+        # Parse comma-separated domains
+        domains = [d.strip() for d in domains_arg.split(",") if d.strip()]
+        logging.debug("Parsed %d domains from --domains argument", len(domains))
+    
+    if domains_file_arg:
+        # Read domains from file (one per line)
+        try:
+            with open(domains_file_arg, "r", encoding="utf-8") as f:
+                domains = [line.strip() for line in f if line.strip()]
+            logging.debug("Read %d domains from file: %s", len(domains), domains_file_arg)
+        except FileNotFoundError:
+            raise ValueError(f"Domain file not found: {domains_file_arg}")
+        except Exception as e:
+            raise ValueError(f"Error reading domain file: {e}")
+    
+    if not domains:
+        raise ValueError("No valid domains found in input.")
+    
+    return domains
+
+# ------------------------------------------------------------------------------
+def write_csv(results_data, output_filename=None, prefix="reverse_whois"):
     """
     Write the query results (from the "results" field) to a CSV file.
     The file is saved in a subfolder called "results" with the filename either:
-      - reverse_whois_YYYY-MM-DD_HH:mm:ss.csv (default), or
+      - {prefix}_YYYY-MM-DD_HH:mm:ss.csv (default), or
       - the user-specified filename from --output.
+    
+    Args:
+        results_data: List of result dictionaries to write to CSV.
+        output_filename: Optional custom filename from user.
+        prefix: Prefix for auto-generated filename (default: "reverse_whois").
     """
     results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
     os.makedirs(results_dir, exist_ok=True)
@@ -187,7 +277,7 @@ def write_csv(results_data, output_filename=None):
             filename += ".csv"
     else:
         now = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        filename = f"reverse_whois_{now}.csv"
+        filename = f"{prefix}_{now}.csv"
 
     filepath = os.path.join(results_dir, filename)
     logging.info("Saving CSV to: %s", filepath)
@@ -235,9 +325,9 @@ def main():
     # Set up the main argument parser.
     parser = argparse.ArgumentParser(
         description=(
-            "Reverse WHOIS Query Tool for the Big Domain Data Reverse WHOIS API.\n"
-            "This independent tool allows you to query either the 'current' or 'historical' database.\n"
-            "You can filter your query by providing one or more search field options.\n"
+            "WHOIS Query Tool for the Big Domain Data API.\n"
+            "This independent tool allows you to query either the 'current' or 'historical' database "
+            "for reverse WHOIS searches, or use the 'bulk' endpoint to query multiple domains.\n"
             "Valid search fields include:\n  " + ", ".join(VALID_SEARCH_FIELDS)
         ),
         epilog="For more information on the API, please refer to: https://www.bigdomaindata.com/guide.php"
@@ -247,9 +337,20 @@ def main():
                         help="Show debug logging information.")
     parser.add_argument(
         "endpoint",
-        choices=["current", "historical"],
+        choices=["current", "historical", "bulk"],
         nargs="?",
-        help="Select which database to query: 'current' or 'historical'."
+        help="Select which endpoint to query: 'current', 'historical', or 'bulk'."
+    )
+    parser.add_argument(
+        "--domains",
+        type=str,
+        help="Comma-separated list of domains for bulk WHOIS query (e.g., yahoo.com,google.com)."
+    )
+    parser.add_argument(
+        "--domains-file",
+        type=str,
+        dest="domains_file",
+        help="Path to file containing domains (one per line) for bulk WHOIS query."
     )
     for field in VALID_SEARCH_FIELDS:
         parser.add_argument(
@@ -297,9 +398,77 @@ def main():
         sys.exit(0)
 
     if not args.endpoint:
-        print("Error: You must specify an endpoint ('current' or 'historical') unless using --balance.")
+        print("Error: You must specify an endpoint ('current', 'historical', or 'bulk') unless using --balance.")
         sys.exit(1)
 
+    # Handle bulk WHOIS queries
+    if args.endpoint == "bulk":
+        try:
+            domains = parse_domain_input(args.domains, args.domains_file)
+            logging.info("Performing bulk WHOIS query for %d domains", len(domains))
+            print(f"Querying {len(domains)} domains via bulk WHOIS API...")
+            
+            response = query_bulk_whois_api(settings.API_KEY, domains)
+        except ValueError as ve:
+            print(f"Error: {ve}")
+            sys.exit(1)
+        except Exception:
+            logging.exception("Bulk WHOIS query failed.")
+            sys.exit(1)
+        
+        # Print a summary of the query response
+        success_status = response.get("success")
+        print("Success:", success_status)
+        
+        # Handle the response structure which may vary
+        if success_status:
+            # Count results
+            results_data = response.get("results", [])
+            if isinstance(results_data, dict):
+                # If results is a dict with domain keys
+                count = len(results_data)
+                # Convert dict to list for CSV writing
+                results_list = []
+                for domain, info in results_data.items():
+                    if isinstance(info, dict):
+                        info["domain"] = domain
+                        results_list.append(info)
+                    else:
+                        results_list.append({"domain": domain, "data": str(info)})
+                results_data = results_list
+            else:
+                count = len(results_data) if results_data else 0
+            
+            print(f"Results: {count} domain(s) returned")
+            
+            # Check for stats
+            stats_info = response.get("stats")
+            if stats_info and "api_credits_used" in stats_info:
+                credits_used = stats_info["api_credits_used"]
+                print(f"Query used {credits_used} API credits")
+            
+            if not results_data:
+                print("No results found.")
+            else:
+                try:
+                    csv_filepath = write_csv(results_data, output_filename=args.output, prefix="bulk_whois")
+                    print(f"Results saved to CSV file: {csv_filepath}")
+                    if args.show:
+                        print("\nCSV File Content:")
+                        with open(csv_filepath, "r", encoding="utf-8") as f:
+                            print(f.read())
+                except Exception:
+                    logging.exception("Failed to write CSV output.")
+                    sys.exit(1)
+        else:
+            error_msg = response.get("error", "Unknown error")
+            print(f"Error: {error_msg}")
+            sys.exit(1)
+        
+        logging.info("Bulk WHOIS query completed.")
+        sys.exit(0)
+
+    # Handle reverse WHOIS queries (current/historical)
     # Build search parameters dictionary.
     search_params = {}
     for field in VALID_SEARCH_FIELDS:

@@ -1,0 +1,7 @@
+example.com
+google.com
+github.com
+amazon.com
+microsoft.com
+apple.com
+
